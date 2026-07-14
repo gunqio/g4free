@@ -17,15 +17,12 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: private
 
-      - name: 📂 移动脚本到工作目录
+      - name: 📂 确认脚本存在
         run: |
-          # 如果私库中的文件名是 game4free_renew.py，重命名为 gaming4free.py
-          if [ -f private/game4free_renew.py ]; then
-            mv private/game4free_renew.py gaming4free.py
-          elif [ -f private/gaming4free.py ]; then
-            mv private/gaming4free.py gaming4free.py
+          if [ -f private/gaming4free.py ]; then
+            echo "✅ 找到 gaming4free.py"
           else
-            echo "❌ 未找到脚本文件"
+            echo "❌ 私库中未找到 gaming4free.py，请检查文件名"
             exit 1
           fi
 
@@ -61,7 +58,7 @@ jobs:
           GAME4FREE_PROXY: ${{ secrets.GAME4FREE_PROXY }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python gaming4free.py
+            python private/gaming4free.py
 
       - name: 📸 上传截图
         if: always()
