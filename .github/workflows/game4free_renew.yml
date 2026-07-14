@@ -17,12 +17,12 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: private
 
-      - name: 📂 确认脚本存在
+      - name: 🔍 确认脚本文件存在
         run: |
-          if [ -f private/gaming4free.py ]; then
-            echo "✅ 找到 gaming4free.py"
+          if [ -f private/game4free.py ]; then
+            echo "✅ 找到 game4free.py"
           else
-            echo "❌ 私库中未找到 gaming4free.py，请检查文件名"
+            echo "❌ 私库中未找到 game4free.py，请检查文件名"
             exit 1
           fi
 
@@ -58,7 +58,7 @@ jobs:
           GAME4FREE_PROXY: ${{ secrets.GAME4FREE_PROXY }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python private/gaming4free.py
+            python private/game4free.py
 
       - name: 📸 上传截图
         if: always()
