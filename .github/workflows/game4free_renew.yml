@@ -18,14 +18,23 @@ jobs:
           path: private
 
       - name: 📂 移动脚本到工作目录
-        run: mv private/game4free_renew.py game4free_renew.py
+        run: |
+          # 如果私库中的文件名是 game4free_renew.py，重命名为 gaming4free.py
+          if [ -f private/game4free_renew.py ]; then
+            mv private/game4free_renew.py gaming4free.py
+          elif [ -f private/gaming4free.py ]; then
+            mv private/gaming4free.py gaming4free.py
+          else
+            echo "❌ 未找到脚本文件"
+            exit 1
+          fi
 
       - name: 🐍 设置 Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: 📦 安装 sing-box（官方脚本）
+      - name: 📦 安装 sing-box
         run: |
           bash -c "$(curl -fsSL https://sing-box.app/install.sh)"
           sing-box version
@@ -52,7 +61,7 @@ jobs:
           GAME4FREE_PROXY: ${{ secrets.GAME4FREE_PROXY }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python game4free_renew.py
+            python gaming4free.py
 
       - name: 📸 上传截图
         if: always()
