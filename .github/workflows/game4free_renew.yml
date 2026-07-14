@@ -1,8 +1,9 @@
 name: Game4Free-Renew
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 1 * * *'  # 每天凌晨1点
 
 jobs:
   renew:
@@ -21,38 +22,47 @@ jobs:
         run: |
           if [ -f private/gaming4free.py ]; then
             echo "✅ 找到 gaming4free.py"
+            ls -la private/
           else
-            echo "❌ 私库中未找到 gaming4free.py，请检查文件名"
+            echo "❌ 私库中未找到 gaming4free.py"
+            find private/ -name "*.py" | head -20
             exit 1
           fi
 
       - name: 🐍 设置 Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5  # 升级到 v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'  # 升级版本
 
       - name: 📦 安装 sing-box
         run: |
           bash -c "$(curl -fsSL https://sing-box.app/install.sh)"
           sing-box version
 
-      - name: 🛠️ 安装系统依赖
+      - name: 🛠️ 安装 Chrome 和系统依赖
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y \
-            google-chrome-stable \
-            xvfb \
-            xdotool
+          # 安装 Chrome（使用官方源或备用方案）
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -q
+          sudo apt-get install -y google-chrome-stable xvfb xdotool
+          google-chrome --version
 
       - name: 🐍 安装 Python 依赖
-        run: pip install seleniumbase
+        run: |
+          pip install --upgrade pip
+          pip install seleniumbase==4.33.12  # 固定版本避免兼容性 breakage
 
       - name: 🔧 安装 ChromeDriver
-        run: seleniumbase install chromedriver
+        run: |
+          seleniumbase install chromedriver
+          chromedriver --version || true
 
       - name: 🚀 运行续期脚本
         env:
           PYTHONIOENCODING: utf-8
+          PYTHONUNBUFFERED: 1  # 实时输出日志
           TG_BOT: ${{ secrets.TG_BOT }}
           GAME4FREE_ACCOUNT: ${{ secrets.GAME4FREE_ACCOUNT }}
           GAME4FREE_PROXY: ${{ secrets.GAME4FREE_PROXY }}
@@ -60,9 +70,11 @@ jobs:
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python private/gaming4free.py
 
-      - name: 📸 上传截图
+      - name: 📸 上传截图和日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshots
-          path: "*.png"
+          name: debug-artifacts
+          path: |
+            *.png
+            *.log
