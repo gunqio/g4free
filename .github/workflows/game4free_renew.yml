@@ -1,8 +1,7 @@
 name: Game Container Auto Renewal
 
 on:
-  schedule:
-    - cron: '0 */4 * * *'  # 每 4 小时运行一次
+ 
   workflow_dispatch:
   repository_dispatch:
     types: [external-trigger]
