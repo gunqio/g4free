@@ -45,7 +45,7 @@ jobs:
         run: |
           # 克隆私库到 private 目录
           git clone https://${PRIVATE_REPO_TOKEN}@github.com/gunqio/zhiyong.git private
-          
+
           # 检查文件是否存在
           if [ -f private/renew.js ]; then
             echo "✅ renew.js 下载成功"
@@ -54,7 +54,7 @@ jobs:
             echo "❌ private/renew.js 不存在"
             exit 1
           fi
-          
+
           if [ -f private/cookies.json ]; then
             echo "✅ cookies.json 下载成功"
             cp private/cookies.json ./cookies.json
@@ -63,21 +63,32 @@ jobs:
             echo '[]' > ./cookies.json
           fi
 
-      # 6. 解析 VLESS 链接生成 Xray 配置
-      - name: Parse VLESS Link and Generate Xray Config
+      # 6. 解析代理链接（支持 VLESS 和 VMess）生成 Xray 配置
+      - name: Parse Proxy Link and Generate Xray Config
         env:
-          VLESS_LINK: ${{ secrets.VLESS_LINK }}
+          PROXY_LINK: ${{ secrets.PROXY_LINK }}
         run: |
           node -e "
           const fs = require('fs');
           const { URL } = require('url');
-          const vlessLink = process.env.VLESS_LINK;
-          if (!vlessLink) {
-              console.error('Error: VLESS_LINK secret is missing!');
+
+          const proxyLink = process.env.PROXY_LINK;
+          if (!proxyLink) {
+              console.error('Error: PROXY_LINK secret is missing!');
               process.exit(1);
           }
-          try {
-              const urlObj = new URL(vlessLink);
+
+          let config;
+          const socksInbound = {
+              'listen': '127.0.0.1',
+              'port': 10808,
+              'protocol': 'socks',
+              'settings': { 'udp': true, 'auth': 'noauth' }
+          };
+
+          if (proxyLink.startsWith('vless://')) {
+              // === VLESS 解析 ===
+              const urlObj = new URL(proxyLink);
               const uuid = urlObj.username;
               const address = urlObj.hostname;
               const port = parseInt(urlObj.port);
@@ -88,14 +99,9 @@ jobs:
               const sni = searchParams.get('sni') || searchParams.get('host') || address;
               const host = searchParams.get('host') || address;
 
-              const config = {
+              config = {
                   'log': { 'loglevel': 'warning' },
-                  'inbounds': [{
-                      'listen': '127.0.0.1',
-                      'port': 10808,
-                      'protocol': 'socks',
-                      'settings': { 'udp': true, 'auth': 'noauth' }
-                  }],
+                  'inbounds': [socksInbound],
                   'outbounds': [{
                       'protocol': 'vless',
                       'settings': {
@@ -119,12 +125,63 @@ jobs:
                       }
                   }]
               };
-              fs.writeFileSync('config.json', JSON.stringify(config, null, 2));
-              console.log('Successfully generated config.json for Xray-core!');
-          } catch (err) {
-              console.error('Failed to parse VLESS_LINK:', err.message);
+
+          } else if (proxyLink.startsWith('vmess://')) {
+              // === VMess 解析 ===
+              const base64Data = proxyLink.replace('vmess://', '');
+              const decoded = Buffer.from(base64Data, 'base64').toString('utf-8');
+              const vmess = JSON.parse(decoded);
+
+              const address = vmess.add;
+              const port = parseInt(vmess.port);
+              const uuid = vmess.id;
+              const type = vmess.net || 'tcp';
+              const security = vmess.tls === 'tls' ? 'tls' : 'none';
+              const path = vmess.path || '/';
+              const sni = vmess.sni || vmess.host || address;
+              const host = vmess.host || address;
+
+              config = {
+                  'log': { 'loglevel': 'warning' },
+                  'inbounds': [socksInbound],
+                  'outbounds': [{
+                      'protocol': 'vmess',
+                      'settings': {
+                          'vnext': [{
+                              'address': address,
+                              'port': port,
+                              'users': [{
+                                  'id': uuid,
+                                  'alterId': parseInt(vmess.aid || '0'),
+                                  'security': vmess.scy || 'auto'
+                              }]
+                          }]
+                      },
+                      'streamSettings': {
+                          'network': type,
+                          'security': security,
+                          'tlsSettings': security === 'tls' ? {
+                              'serverName': sni,
+                              'allowInsecure': vmess.insecure === '1'
+                          } : undefined,
+                          'wsSettings': type === 'ws' ? {
+                              'path': path,
+                              'headers': { 'Host': host }
+                          } : undefined
+                      }
+                  }]
+              };
+
+          } else {
+              console.error('Unsupported proxy link format. Only vless:// and vmess:// are supported.');
               process.exit(1);
           }
+
+          fs.writeFileSync('config.json', JSON.stringify(config, null, 2));
+          console.log('✅ Successfully generated config.json for Xray-core!');
+          console.log('Protocol:', config.outbounds[0].protocol);
+          console.log('Server:', config.outbounds[0].settings.vnext[0].address);
+          console.log('Port:', config.outbounds[0].settings.vnext[0].port);
           "
 
       # 7. 下载并运行 Xray-core
@@ -159,7 +216,7 @@ jobs:
           cd private
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           # 复制更新后的 cookies.json
           if [ -f ../cookies.json ]; then
             cp ../cookies.json ./cookies.json
