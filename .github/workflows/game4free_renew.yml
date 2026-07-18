@@ -1,9 +1,7 @@
 name: Game Container Auto Renewal
 
 on:
- 
   workflow_dispatch:
-
 jobs:
   renew:
     runs-on: ubuntu-latest
