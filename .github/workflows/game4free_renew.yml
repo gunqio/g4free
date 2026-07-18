@@ -1,64 +1,178 @@
-name: Game4Free-Renew
+name: Game Container Auto Renewal
+
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 */4 * * *'  # 每 4 小时运行一次
+  workflow_dispatch:
+  repository_dispatch:
+    types: [external-trigger]
 
 jobs:
   renew:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    permissions:
+      contents: write
 
     steps:
-      - name: 📥 下载私库脚本
+      # 1. 检出主仓库（用于存放工作流）
+      - name: Checkout Main Repo
         uses: actions/checkout@v4
         with:
-          repository: gunqio/zhiyong
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          path: private
+          persist-credentials: false
 
-      - name: 📂 移动脚本到工作目录
-        run: mv private/game4free_renew.py game4free_renew.py
-
-      - name: 🐍 设置 Python
-        uses: actions/setup-python@v4
+      # 2. 设置 Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.10'
+          node-version: '20'
 
-      - name: 📦 下载 GOST
+      # 3. 安装系统依赖
+      - name: Install System Dependencies
         run: |
-          VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest \
-            | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
-          echo "📦 GOST 版本: $VERSION"
-          wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
-          tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
-          chmod +x gost
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgbm-dev udev unzip netcat-openbsd git
 
-      - name: 🛠️ 安装系统依赖
+      # 4. 安装 Node 依赖
+      - name: Install Node Dependencies
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y \
-            google-chrome-stable \
-            xvfb \
-            xdotool
+          npm init -y
+          npm install puppeteer-real-browser axios
 
-      - name: 🐍 安装 Python 依赖
-        run: pip install seleniumbase
-
-      - name: 🔧 安装 ChromeDriver
-        run: seleniumbase install chromedriver
-
-      - name: 🚀 运行续期脚本
+      # 5. 从私库拉取 renew.js 和 cookies.json
+      - name: 📥 从私库拉取脚本和 Cookie
         env:
-          PYTHONIOENCODING: utf-8
-          TG_BOT: ${{ secrets.TG_BOT }}
-          GAME4FREE_ACCOUNT: ${{ secrets.GAME4FREE_ACCOUNT }}
-          GAME4FREE_PROXY: ${{ secrets.GAME4FREE_PROXY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            python game4free_renew.py
+          # 克隆私库到 private 目录
+          git clone https://${PRIVATE_REPO_TOKEN}@github.com/gunqio/zhiyong.git private
+          
+          # 检查文件是否存在
+          if [ -f private/renew.js ]; then
+            echo "✅ renew.js 下载成功"
+            cp private/renew.js ./renew.js
+          else
+            echo "❌ private/renew.js 不存在"
+            exit 1
+          fi
+          
+          if [ -f private/cookies.json ]; then
+            echo "✅ cookies.json 下载成功"
+            cp private/cookies.json ./cookies.json
+          else
+            echo "⚠️ private/cookies.json 不存在，将创建新文件"
+            echo '[]' > ./cookies.json
+          fi
 
-      - name: 📸 上传截图
+      # 6. 解析 VLESS 链接生成 Xray 配置
+      - name: Parse VLESS Link and Generate Xray Config
+        env:
+          VLESS_LINK: ${{ secrets.VLESS_LINK }}
+        run: |
+          node -e "
+          const fs = require('fs');
+          const { URL } = require('url');
+          const vlessLink = process.env.VLESS_LINK;
+          if (!vlessLink) {
+              console.error('Error: VLESS_LINK secret is missing!');
+              process.exit(1);
+          }
+          try {
+              const urlObj = new URL(vlessLink);
+              const uuid = urlObj.username;
+              const address = urlObj.hostname;
+              const port = parseInt(urlObj.port);
+              const searchParams = urlObj.searchParams;
+              const type = searchParams.get('type') || 'tcp';
+              const security = searchParams.get('security') || 'none';
+              const path = searchParams.get('path') || '/';
+              const sni = searchParams.get('sni') || searchParams.get('host') || address;
+              const host = searchParams.get('host') || address;
+
+              const config = {
+                  'log': { 'loglevel': 'warning' },
+                  'inbounds': [{
+                      'listen': '127.0.0.1',
+                      'port': 10808,
+                      'protocol': 'socks',
+                      'settings': { 'udp': true, 'auth': 'noauth' }
+                  }],
+                  'outbounds': [{
+                      'protocol': 'vless',
+                      'settings': {
+                          'vnext': [{
+                              'address': address,
+                              'port': port,
+                              'users': [{ 'id': uuid, 'encryption': 'none' }]
+                          }]
+                      },
+                      'streamSettings': {
+                          'network': type,
+                          'security': security,
+                          'tlsSettings': security === 'tls' ? {
+                              'serverName': sni,
+                              'allowInsecure': false
+                          } : undefined,
+                          'wsSettings': type === 'ws' ? {
+                              'path': path,
+                              'headers': { 'Host': host }
+                          } : undefined
+                      }
+                  }]
+              };
+              fs.writeFileSync('config.json', JSON.stringify(config, null, 2));
+              console.log('Successfully generated config.json for Xray-core!');
+          } catch (err) {
+              console.error('Failed to parse VLESS_LINK:', err.message);
+              process.exit(1);
+          }
+          "
+
+      # 7. 下载并运行 Xray-core
+      - name: Download and Run Xray-core
+        run: |
+          curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-64.zip
+          mkdir -p xray-bin
+          unzip -o xray.zip -d xray-bin
+          chmod +x xray-bin/xray
+          ./xray-bin/xray run -c config.json > xray.log 2>&1 &
+          sleep 5
+          nc -z -v 127.0.0.1 10808 || { echo 'Local SOCKS5 proxy port is not active!'; exit 1; }
+
+      # 8. 运行续期脚本
+      - name: Run Renewal Script via Xvfb
+        env:
+          CONSOLE_URL: ${{ secrets.CONSOLE_URL }}
+          COOKIE_XSRF: ${{ secrets.COOKIE_XSRF }}
+          COOKIE_SESSION: ${{ secrets.COOKIE_SESSION }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PROXY: socks5://127.0.0.1:10808
+        run: |
+          xvfb-run --server-args="-screen 0 1280x1200x24" node renew.js
+
+      # 9. 将更新后的 cookies.json 推回私库
+      - name: 📤 推送更新后的 cookies.json 到私库
+        if: always()
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          cd private
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 复制更新后的 cookies.json
+          if [ -f ../cookies.json ]; then
+            cp ../cookies.json ./cookies.json
+            git add cookies.json
+            git diff-index --quiet HEAD || git commit -m "chore: auto-update session cookies [skip ci]"
+            git push origin HEAD:main || git push origin HEAD:master
+            echo "✅ cookies.json 已推回私库"
+          else
+            echo "⚠️ 未生成新的 cookies.json，跳过推送"
+          fi
+
+      # 10. 上传调试截图
+      - name: Upload Debug Screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
